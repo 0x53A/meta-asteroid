@@ -1,0 +1,26 @@
+From: Lukas Rieger <code@lukasrieger.com>
+Subject: [PATCH] wifi: refresh readiness when recreating an interface
+
+After a power cycle the new supplicant interface can initially be disabled
+by rfkill. Keeping interface_ready=true from the previous interface causes
+interface_state() to skip finalize_interface_creation() when the new one
+becomes ready. The device remains unpowered and scans fail with ENOLINK,
+even though the WiFi technology reports Powered=true.
+
+Always refresh the cached readiness from the newly created interface.
+
+Upstream-Status: Pending
+
+--- a/plugins/wifi.c
++++ b/plugins/wifi.c
+@@ -1559,8 +1559,8 @@
+ 	wifi->interface = interface;
+ 	g_supplicant_interface_set_data(interface, wifi);
+ 
+-	if (g_supplicant_interface_get_ready(interface)) {
+-		wifi->interface_ready = true;
++	wifi->interface_ready = g_supplicant_interface_get_ready(interface);
++	if (wifi->interface_ready) {
+ 		finalize_interface_creation(wifi);
+ 	}
+ 

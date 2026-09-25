@@ -1,0 +1,200 @@
+Subject: [PATCH] device: preserve power requests across asynchronous transitions
+
+An rfkill-driven technology can acknowledge power-off before its device has
+finished removing the supplicant interface. An immediate power-on then unblocks
+rfkill but loses the device enable request to PENDING_DISABLE/EBUSY, leaving a
+powered technology with no interface.
+
+Track the latest power intent independently of the active operation and
+reconcile it from an idle source after completion. Cancel owned sources on
+driver removal and destruction, clear pending state on immediate errors, and
+avoid adding a timeout after inline completion. A timeout does not cause an
+unbounded retry; a late completion still observes the latest intent.
+
+Validated with a mocked asynchronous driver, including cancellation, errors,
+late completion, removal and 200 alternating-request sequences. Hoki passed
+20 rapid Wi-Fi sequences, final-off behavior and a rapid WPA2 toggle, plus
+reconnect, service restart and reboot checks.
+
+Upstream-Status: Pending
+
+--- a/src/device.c
++++ b/src/device.c
+@@ -51,6 +51,8 @@
+ 							 * enable/disable
+ 							 * request
+ 							 */
++	enum connman_pending_type powered_requested;
++	guint power_reconcile;
+ 	bool powered;
+ 	bool scanning[MAX_CONNMAN_SERVICE_TYPES];
+ 	char *name;
+@@ -174,13 +176,57 @@
+ 	return service_type == device_service_type;
+ }
+ 
++/* Reconcile from the main loop, after the driver's completion callback
++ * has finished using the old interface. The latest request wins.
++ */
++static gboolean device_reconcile_power(gpointer user_data)
++{
++	struct connman_device *device = user_data;
++
++	device->power_reconcile = 0;
++	if (!device->driver || device->powered_pending != PENDING_NONE)
++		return FALSE;
++
++	if (device->powered_requested == PENDING_ENABLE)
++		__connman_device_enable(device);
++	else if (device->powered_requested == PENDING_DISABLE)
++		__connman_device_disable(device);
++
++	return FALSE;
++}
++
++static void device_schedule_power(struct connman_device *device)
++{
++	if (!device->driver || device->power_reconcile ||
++			device->powered_requested == PENDING_NONE ||
++			device->powered_pending != PENDING_NONE ||
++			device->powered ==
++			(device->powered_requested == PENDING_ENABLE))
++		return;
++
++	device->power_reconcile = g_idle_add(device_reconcile_power, device);
++}
++
++static void device_cancel_power(struct connman_device *device)
++{
++	clear_pending_trigger(device);
++	if (device->power_reconcile) {
++		g_source_remove(device->power_reconcile);
++		device->power_reconcile = 0;
++	}
++	device->powered_pending = PENDING_NONE;
++	device->powered_requested = PENDING_NONE;
++}
++
+ static gboolean device_pending_reset(gpointer user_data)
+ {
+ 	struct connman_device *device = user_data;
+ 
+ 	DBG("device %p", device);
+ 
+-	/* Power request timedout, reset power pending state. */
++	/* Do not retry a timed-out operation indefinitely. A later completion
++	 * will still reconcile against powered_requested.
++	 */
+ 	device->pending_timeout = 0;
+ 	device->powered_pending = PENDING_NONE;
+ 
+@@ -196,11 +242,8 @@
+ 	if (!device->driver || !device->driver->enable)
+ 		return -EOPNOTSUPP;
+ 
+-	/* There is an ongoing power disable request. */
+-	if (device->powered_pending == PENDING_DISABLE)
+-		return -EBUSY;
+-
+-	if (device->powered_pending == PENDING_ENABLE)
++	device->powered_requested = PENDING_ENABLE;
++	if (device->powered_pending != PENDING_NONE)
+ 		return -EINPROGRESS;
+ 
+ 	if (device->powered_pending == PENDING_NONE && device->powered)
+@@ -234,9 +277,11 @@
+ 	 * was successful. We set a 4 sec timeout so if the daemon never
+ 	 * returns a reply, we would reset the pending request.
+ 	 */
+-	if (err == -EINPROGRESS)
++	if (err == -EINPROGRESS && device->powered_pending != PENDING_NONE)
+ 		device->pending_timeout = g_timeout_add_seconds(4,
+ 					device_pending_reset, device);
++	else if (err != -EINPROGRESS)
++		device->powered_pending = PENDING_NONE;
+ done:
+ 	return err;
+ }
+@@ -247,11 +292,11 @@
+ 
+ 	DBG("device %p", device);
+ 
+-	/* Ongoing power enable request */
+-	if (device->powered_pending == PENDING_ENABLE)
+-		return -EBUSY;
+-
+-	if (device->powered_pending == PENDING_DISABLE)
++	if (!device->driver || !device->driver->disable)
++		return -EOPNOTSUPP;
++
++	device->powered_requested = PENDING_DISABLE;
++	if (device->powered_pending != PENDING_NONE)
+ 		return -EINPROGRESS;
+ 
+ 	if (device->powered_pending == PENDING_NONE && !device->powered)
+@@ -269,18 +314,17 @@
+ 			connman_network_set_connected(device->network, false);
+ 	}
+ 
+-	if (!device->driver || !device->driver->disable)
+-		return -EOPNOTSUPP;
+-
+ 	err = device->driver->disable(device);
+ 	if (err == 0 || err == -EALREADY) {
+ 		connman_device_set_powered(device, false);
+ 		goto done;
+ 	}
+ 
+-	if (err == -EINPROGRESS)
++	if (err == -EINPROGRESS && device->powered_pending != PENDING_NONE)
+ 		device->pending_timeout = g_timeout_add_seconds(4,
+ 					device_pending_reset, device);
++	else if (err != -EINPROGRESS)
++		device->powered_pending = PENDING_NONE;
+ done:
+ 	return err;
+ }
+@@ -314,6 +358,7 @@
+ 	DBG("device %p", device);
+ 
+ 	__connman_device_disable(device);
++	device_cancel_power(device);
+ 
+ 	__connman_technology_remove_device(device);
+ 
+@@ -404,7 +449,7 @@
+ {
+ 	DBG("device %p name %s", device, device->name);
+ 
+-	clear_pending_trigger(device);
++	device_cancel_power(device);
+ 
+ 	g_hash_table_destroy(device->networks);
+ 	device->networks = NULL;
+@@ -594,14 +639,25 @@
+ 
+ 	DBG("device %p powered %d", device, powered);
+ 
+-	if (device->powered == powered)
++	if (device->powered == powered) {
++		/* A completion may report an unchanged state. Only consume it
++		 * if it matches the operation currently pending.
++		 */
++		if (device->powered_pending == (powered ?
++				PENDING_ENABLE : PENDING_DISABLE)) {
++			clear_pending_trigger(device);
++			device->powered_pending = PENDING_NONE;
++			device_schedule_power(device);
++		}
+ 		return -EALREADY;
++	}
+ 
+ 	clear_pending_trigger(device);
+ 
+ 	device->powered_pending = PENDING_NONE;
+ 
+ 	device->powered = powered;
++	device_schedule_power(device);
+ 
+ 	type = __connman_device_get_service_type(device);
+ 

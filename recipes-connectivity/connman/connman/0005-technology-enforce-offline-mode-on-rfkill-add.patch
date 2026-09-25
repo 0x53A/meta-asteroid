@@ -1,0 +1,38 @@
+Subject: [PATCH] technology: block newly-added rfkill devices while offline
+
+A new controller can arrive unblocked while OfflineMode is true. Do not enable
+its technology on ADD; request blocking and apply the confirmed CHANGE normally.
+Still process the ADD's hard-block metadata: a newly usable controller can make
+a previously fully hard-blocked technology available. Returning before updating
+that metadata leaves the technology incorrectly hard-blocked with mixed devices.
+
+Also suppress transient enabling when a hardware block is released while offline;
+the existing hard-block-change path already requests a soft block in this case.
+Preserve explicit soft-block power changes on existing controllers and persistent
+policy outside offline mode. Propagate the new ADD blocking request's error.
+
+Upstream-Status: Pending
+
+--- a/src/technology.c
++++ b/src/technology.c
+@@ -1764,8 +1764,9 @@
+ 					technology->softblocked) {
+ 		if (technology_disabled(technology) != -EALREADY)
+ 			technology_affect_devices(technology, false);
+-	} else if (!technology->hardblocked &&
+-					!technology->softblocked) {
++	} else if (!(global_offlinemode &&
++			(new_rfkill || hardblock_changed)) &&
++			!technology->hardblocked && !technology->softblocked) {
+ 		if (technology_enabled(technology) != -EALREADY)
+ 			technology_affect_devices(technology, true);
+ 	}
+@@ -1825,6 +1826,8 @@
+ 				softblock, hardblock, true))
+ 		return 0;
+ 
++	if (global_offlinemode && !softblock)
++		return __connman_rfkill_block(type, true);
+ 	if (global_offlinemode)
+ 		return 0;
+ 

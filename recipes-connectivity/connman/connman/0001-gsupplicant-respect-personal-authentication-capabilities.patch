@@ -1,0 +1,106 @@
+From: Lukas Rieger <code@lukasrieger.com>
+Subject: [PATCH] gsupplicant: respect interface key-management capabilities
+
+Only offer personal-network authentication methods advertised by the
+supplicant interface. In particular, do not request SAE on an interface
+without SAE support. Honor the SSID's MFP policy instead of unconditionally
+replacing it with optional MFP, and omit SAE/SHA256 when MFP is disabled.
+Reject a connection when no usable personal authentication method remains.
+
+This leaves normal SAE-capable interfaces on the existing optional-MFP
+path and avoids pretending that PMF support follows from SAE support.
+
+Upstream-Status: Pending
+
+--- a/gsupplicant/supplicant.c
++++ b/gsupplicant/supplicant.c
+@@ -4937,10 +4937,42 @@
+ 					  &ieee80211w);
+ }
+ 
+-static void add_network_security(DBusMessageIter *dict, GSupplicantSSID *ssid)
+-{
+-	GSupplicantMfpOptions ieee80211w;
+-	char *key_mgmt;
++/* WPA-PSK-SHA256 and SAE require management frame protection. */
++static unsigned int psk_keymgmt(unsigned int capabilities,
++					GSupplicantMfpOptions mfp)
++{
++	unsigned int mask = G_SUPPLICANT_KEYMGMT_WPA_PSK;
++
++	if (mfp != G_SUPPLICANT_MFP_NONE)
++		mask |= G_SUPPLICANT_KEYMGMT_WPA_PSK_256 |
++					G_SUPPLICANT_KEYMGMT_SAE;
++
++	return capabilities & mask;
++}
++
++static char *psk_keymgmt_string(unsigned int capabilities,
++					GSupplicantMfpOptions mfp)
++{
++	unsigned int supported = psk_keymgmt(capabilities, mfp);
++	GString *value = g_string_new(NULL);
++
++	if (supported & G_SUPPLICANT_KEYMGMT_SAE)
++		g_string_append(value, "SAE ");
++	if (supported & G_SUPPLICANT_KEYMGMT_WPA_PSK)
++		g_string_append(value, "WPA-PSK ");
++	if (supported & G_SUPPLICANT_KEYMGMT_WPA_PSK_256)
++		g_string_append(value, "WPA-PSK-SHA256 ");
++	if (value->len)
++		g_string_truncate(value, value->len - 1);
++
++	return g_string_free(value, FALSE);
++}
++
++static void add_network_security(DBusMessageIter *dict, GSupplicantSSID *ssid,
++					GSupplicantInterface *interface)
++{
++	const char *key_mgmt;
++	char *psk_methods = NULL;
+ 
+ 	switch (ssid->security) {
+ 	case G_SUPPLICANT_SECURITY_NONE:
+@@ -4955,9 +4987,10 @@
+ 		add_network_security_ciphers(dict, ssid);
+ 		break;
+ 	case G_SUPPLICANT_SECURITY_PSK:
+-		key_mgmt = "SAE WPA-PSK WPA-PSK-SHA256";
+-		ieee80211w = G_SUPPLICANT_MFP_OPTIONAL;
+-		add_network_ieee80211w(dict, ssid, ieee80211w);
++		psk_methods = psk_keymgmt_string(interface->keymgmt_capa,
++						ssid->ieee80211w);
++		key_mgmt = psk_methods;
++		add_network_ieee80211w(dict, ssid, ssid->ieee80211w);
+ 		add_network_security_psk(dict, ssid);
+ 		add_network_security_ciphers(dict, ssid);
+ 		add_network_security_proto(dict, ssid);
+@@ -4972,6 +5005,8 @@
+ 
+ 	supplicant_dbus_dict_append_basic(dict, "key_mgmt",
+ 				DBUS_TYPE_STRING, &key_mgmt);
++
++	g_free(psk_methods);
+ }
+ 
+ static void add_network_mode(DBusMessageIter *dict, GSupplicantSSID *ssid)
+@@ -5017,7 +5052,7 @@
+ 
+ 	add_network_mode(&dict, ssid);
+ 
+-	add_network_security(&dict, ssid);
++	add_network_security(&dict, ssid, data->interface);
+ 
+ 	supplicant_dbus_dict_append_fixed_array(&dict, "ssid",
+ 					DBUS_TYPE_BYTE, &ssid->ssid,
+@@ -5121,6 +5156,10 @@
+ 
+ 	if (!system_available)
+ 		return -EFAULT;
++
++	if (!ssid->use_wps && ssid->security == G_SUPPLICANT_SECURITY_PSK &&
++			!psk_keymgmt(interface->keymgmt_capa, ssid->ieee80211w))
++		return -EOPNOTSUPP;
+ 
+ 	/* TODO: Check if we're already connected and switch */
+ 
