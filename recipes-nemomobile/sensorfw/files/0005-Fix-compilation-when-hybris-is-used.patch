@@ -22,7 +22,7 @@ index 6225e47..8d32897 100644
 --- a/core/core.pro
 +++ b/core/core.pro
 @@ -96,12 +96,9 @@ lunaservice {
-     PKGCONFIG += luna-service2 LunaSysMgrCommon LunaSysMgrIpcMessages
+     PKGCONFIG += luna-service2 LunaSysMgrCommon
  }
  
 -contains(CONFIG,hybris) {

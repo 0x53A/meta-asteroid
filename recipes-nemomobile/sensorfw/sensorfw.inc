@@ -11,7 +11,7 @@ SRC_URI = "git://github.com/sailfishos/sensorfw.git;protocol=https;branch=master
            file://0005-Fix-compilation-when-hybris-is-used.patch \
            file://0006-hybrisadaptor-Queue-erroneous-events-too.patch \
            file://sensorfwd.service"
-SRCREV = "0.15.1"
+SRCREV = "b889c3d20254e44bc408e64449562c84898506f1"
 PR = "r1"
 PV = "+git${SRCPV}"
 B = "${S}"
