@@ -6,6 +6,7 @@ LIC_FILES_CHKSUM = "file://bluebinder.c;beginline=1;endline=29;md5=ba064fbc04c56
 
 SRC_URI = "git://github.com/mer-hybris/bluebinder.git;branch=master;protocol=https \
            file://0001-service-fixes.patch \
+           file://0002-make-clean-idempotent.patch \
 "
 SRCREV = "1.0.15"
 PR = "r1"

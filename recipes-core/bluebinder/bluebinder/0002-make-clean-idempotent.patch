@@ -1,0 +1,17 @@
+From: Lukas Rieger <lukas@localhost>
+Subject: [PATCH] Make clean succeed before the first build
+
+OpenEmbedded's default do_configure runs make clean. A fresh source tree
+has no bluebinder executable yet, so plain rm fails and aborts configuration.
+
+Upstream-Status: Pending
+
+--- a/Makefile
++++ b/Makefile
+@@ -18,5 +18,5 @@ install:
+ 	cp bluebinder $(DESTDIR)/usr/sbin
+ 
+ clean:
+-	rm bluebinder
++	$(RM) bluebinder
+ 
