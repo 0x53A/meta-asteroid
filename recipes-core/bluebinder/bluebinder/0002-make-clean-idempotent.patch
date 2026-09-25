@@ -1,4 +1,4 @@
-From: Lukas Rieger <lukas@localhost>
+From: Lukas Rieger <code@lukasrieger.com>
 Subject: [PATCH] Make clean succeed before the first build
 
 OpenEmbedded's default do_configure runs make clean. A fresh source tree
