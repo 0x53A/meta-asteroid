@@ -12,7 +12,7 @@ do_install:append() {
 # Reuse OE-Core packaging with the current Asteroid/Hoki source version.
 PV = "2.0"
 SRC_URI[sha256sum] = "d25c2ddc0b5ad13e986ec35ad765ae8d2f4b7acb47c958a05616c943cd082527"
-PR = "r7"
+PR = "r11"
 
 SRC_URI += " \
     file://0001-gsupplicant-respect-personal-authentication-capabilities.patch \
@@ -25,3 +25,12 @@ SRC_URI += " file://0005-technology-enforce-offline-mode-on-rfkill-add.patch"
 SRC_URI += " file://0006-gsupplicant-handle-autonomous-p2p-groups.patch"
 
 SRC_URI += " file://0001-wifi-reset-interface-readiness-on-recreation.patch"
+
+SRC_URI += " file://0007-wispr-release-context-on-proxy-failure.patch"
+SRC_URI += " file://0008-proxy-drain-pending-lookups-on-cleanup.patch"
+SRC_URI += " file://0009-wispr-detach-context-backpointers.patch"
+SRC_URI += " file://0010-gweb-report-synchronous-resolver-errors.patch"
+SRC_URI += " file://0011-wpad-handle-synchronous-resolver-errors.patch"
+SRC_URI += " file://0012-timeserver-advance-on-synchronous-resolver-error.patch"
+SRC_URI += " file://0013-wispr-handle-followon-request-errors.patch"
+SRC_URI += " file://0014-gweb-hold-web-during-receive.patch"

@@ -1,0 +1,68 @@
+From: Lukas Rieger <code@lukasrieger.com>
+Subject: [PATCH] wispr: release request references on resolver setup failure
+
+GWeb reports synchronous resolver setup failures by returning request ID
+zero without invoking the result callback. The WISPr redirect GET and login
+POST both retain a context reference for that callback but currently ignore
+the failure return, stranding the reference. Report the failure and release
+the corresponding reference when request setup fails.
+
+Upstream-Status: Pending
+---
+--- a/src/wispr.c
++++ b/src/wispr.c
+@@ -912,6 +912,7 @@
+ 				const char *error, void *user_data)
+ {
+ 	struct connman_wispr_portal_context *wp_context = user_data;
++	int err = 0;
+ 
+ 	DBG("");
+ 
+@@ -939,9 +940,18 @@
+ 					wp_context->wispr_msg.login_url,
+ 					"application/x-www-form-urlencoded",
+ 					wispr_input, wispr_portal_web_result,
+-					wp_context, NULL);
++					wp_context, &err);
+ 
+ 	connman_wispr_message_init(&wp_context->wispr_msg);
++	if (wp_context->request_id == 0) {
++		portal_manage_failure_status(wp_context, -err, strerror(-err));
++		wispr_portal_error(wp_context);
++		free_wispr_routes(wp_context);
++		wp_context->request_id = 0;
++
++		/* Release the reference retained for the GWeb result callback. */
++		wispr_portal_context_unref(wp_context);
++	}
+ }
+ 
+ static bool wispr_manage_message(GWebResult *result,
+@@ -1072,6 +1082,7 @@
+ 	guint16 status;
+ 	const char *str = NULL;
+ 	const char *redirect = NULL;
++	int err = 0;
+ 
+ 	status = g_web_result_get_status(result);
+ 
+@@ -1123,7 +1134,17 @@
+ 		wispr_portal_context_ref(wp_context);
+ 		wp_context->request_id = g_web_request_get(wp_context->web,
+ 				redirect, wispr_portal_web_result,
+-				wispr_route_request, wp_context, NULL);
++				wispr_route_request, wp_context, &err);
++		if (wp_context->request_id == 0) {
++			portal_manage_failure_status(wp_context, -err,
++					strerror(-err));
++			wispr_portal_error(wp_context);
++			free_wispr_routes(wp_context);
++			wp_context->request_id = 0;
++
++			/* The outer result callback still owns the prior request ref. */
++			wispr_portal_context_unref(wp_context);
++		}
+ 
+ 		return;
+ 	case GWEB_HTTP_STATUS_CODE_BAD_REQUEST:

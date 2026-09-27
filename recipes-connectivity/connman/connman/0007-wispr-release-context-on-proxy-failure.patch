@@ -1,0 +1,39 @@
+From: Lukas Rieger <code@lukasrieger.com>
+Subject: [PATCH] wispr: release context when proxy lookup fails
+
+wispr_portal_detect() holds a context reference for the asynchronous
+proxy callback. Release it on a NULL proxy result as well as success.
+Otherwise each failed PAC lookup leaves the context and its GWeb resolver
+alive after the next online check replaces it, retaining DNS sockets until
+ConnMan exhausts its descriptor limit.
+
+Clear the completed lookup token before invoking the service callback.
+That callback may release the portal owner, so the final unref must not
+cancel a proxy lookup whose completion is already being dispatched.
+
+Upstream-Status: Pending
+---
+--- a/src/wispr.c
++++ b/src/wispr.c
+@@ -1298,17 +1298,19 @@
+ 	if (!wp_context)
+ 		return;
+ 
++	/* The lookup has completed, including when no proxy was found. */
++	wp_context->proxy_token = 0;
++
+ 	if (!proxy) {
+ 		wispr_log_proxy_failure(wp_context, "No valid proxy");
+ 
+ 		portal_manage_failure_status(wp_context, 0, "no valid proxy");
++		wispr_portal_context_unref(wp_context);
+ 
+ 		return;
+ 	}
+ 
+ 	DBG("proxy %s", proxy);
+-
+-	wp_context->proxy_token = 0;
+ 
+ 	proxy_server = parse_proxy(proxy);
+ 	if (proxy_server) {

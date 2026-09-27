@@ -1,0 +1,30 @@
+From: Lukas Rieger <code@lukasrieger.com>
+Subject: [PATCH] wispr: detach contexts before freeing their portal
+
+A context retains a borrowed pointer to its shared portal. A context can
+outlive the portal's hash-table entry while an asynchronous callback holds a
+reference. Clear the backpointers held by the portal slots before dropping
+their references, so a later context destructor cannot dereference the freed
+portal.
+
+This covers synchronous setup failure for one address family while the other
+family has a callback in flight, as well as other portal teardown paths.
+
+Upstream-Status: Pending
+---
+--- a/src/wispr.c
++++ b/src/wispr.c
+@@ -417,6 +417,13 @@ static void free_connman_wispr_portal(gpointer data)
+ 	if (!wispr_portal)
+ 		return;
+ 
++	/* Context callbacks may outlive the portal's hash-table entry. */
++	if (wispr_portal->ipv4_context)
++		wispr_portal->ipv4_context->wispr_portal = NULL;
++
++	if (wispr_portal->ipv6_context)
++		wispr_portal->ipv6_context->wispr_portal = NULL;
++
+ 	wispr_portal_context_unref(wispr_portal->ipv4_context);
+ 	wispr_portal_context_unref(wispr_portal->ipv6_context);
+ 

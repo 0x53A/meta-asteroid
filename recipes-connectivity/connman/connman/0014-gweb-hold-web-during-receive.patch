@@ -1,0 +1,58 @@
+From: Lukas Rieger <code@lukasrieger.com>
+Subject: [PATCH] gweb: keep sessions alive through receive dispatch
+
+A result callback can release the last external GWeb reference while a
+chunked response is being decoded. GWeb then flushes the active session,
+but the decoder resumes accessing it after the callback. Hold a temporary
+web reference until the receive callback has finished.
+
+Upstream-Status: Pending
+---
+--- a/gweb/gweb.c
++++ b/gweb/gweb.c
+@@ -1458,9 +1458,11 @@
+ 							gpointer user_data)
+ {
+ 	struct web_session *session = user_data;
++	GWeb *web = g_web_ref(session->web);
+ 	const gsize bytes_available = session->receive_space - 1;
+ 	gsize bytes_read;
+ 	GIOStatus status;
++	gboolean keep_session = FALSE;
+ 	g_autoptr(GError) local_error = NULL;
+ 	g_autoptr(GError) error = NULL;
+ 
+@@ -1483,8 +1485,7 @@
+ 			g_strerror(EIO));
+ 
+ 		call_result_func_failure(session, local_error);
+-
+-		return FALSE;
++		goto done;
+ 	}
+ 
+ 	/* Attempt to read received data from the channel. */
+@@ -1502,15 +1503,20 @@
+ 	if (status != G_IO_STATUS_NORMAL && status != G_IO_STATUS_AGAIN) {
+ 		received_data_finalize(session, status,
+ 			bytes_available, bytes_read, error);
+-
+-		return FALSE;
++		goto done;
+ 	}
+ 
+ 	/* Otherwise, continue the session request and process the
+ 	 * received data.
+ 	 */
+ 
+-	return received_data_continue(session, bytes_read);
++	keep_session = received_data_continue(session, bytes_read);
++
++done:
++	/* A result callback may drop its owning GWeb reference. Keep sessions
++	 * alive until this I/O dispatch has finished using them. */
++	g_web_unref(web);
++	return keep_session;
+ }
+ 
+ static int bind_to_address(int sk, const char *interface, int family)

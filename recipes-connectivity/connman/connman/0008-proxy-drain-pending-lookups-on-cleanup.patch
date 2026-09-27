@@ -1,0 +1,19 @@
+From: Lukas Rieger <code@lukasrieger.com>
+Subject: [PATCH] proxy: drain pending lookups without reusing freed list nodes
+
+remove_lookup() removes its entry from lookup_list. Passing that same
+list to remove_lookups() invalidates its traversal and frees its nodes
+twice. Drain the global list directly during shutdown instead.
+
+Upstream-Status: Pending
+---
+--- a/src/proxy.c
++++ b/src/proxy.c
+@@ -249,5 +249,6 @@
+ {
+ 	DBG("");
+ 
+-	remove_lookups(lookup_list);
++	while (lookup_list)
++		remove_lookup(lookup_list->data);
+ }

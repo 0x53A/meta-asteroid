@@ -1,0 +1,48 @@
+From: Lukas Rieger <code@lukasrieger.com>
+Subject: [PATCH] timeserver: advance after immediate resolver errors
+
+A hostname lookup can fail before GResolv queues a callback. Treat those
+results as a failed server, advance through the working list and reach the
+existing retry backoff when none remain. Keep the lookup token unsigned
+to match GResolv's cancellation API.
+
+Upstream-Status: Pending
+---
+--- a/src/timeserver.c
++++ b/src/timeserver.c
+@@ -49,7 +49,7 @@
+ static bool ts_is_synced = false;
+ 
+ static GResolv *resolv = NULL;
+-static int resolv_id = 0;
++static guint resolv_id = 0;
+ 
+ static void sync_next(void);
+ static void ts_set_nameservers(const struct connman_service *service);
+@@ -192,6 +192,8 @@
+ 	ts_set_nameservers(ts_service);
+ 
+ 	while (ts_list) {
++		guint lookup_id;
++
+ 		ts_current = ts_list->data;
+ 		ts_list = g_slist_delete_link(ts_list, ts_list);
+ 
+@@ -203,8 +205,16 @@
+ 		}
+ 
+ 		DBG("Resolving timeserver %s", ts_current);
+-		resolv_id = g_resolv_lookup_hostname(resolv, ts_current,
++		lookup_id = g_resolv_lookup_hostname(resolv, ts_current,
+ 						resolv_result, NULL);
++		if (lookup_id == 0 || lookup_id == (guint) -EIO) {
++			resolv_id = 0;
++			g_free(ts_current);
++			ts_current = NULL;
++			continue;
++		}
++
++		resolv_id = lookup_id;
+ 		return;
+ 	}
+ 

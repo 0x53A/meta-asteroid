@@ -1,0 +1,44 @@
+From: Lukas Rieger <code@lukasrieger.com>
+Subject: [PATCH] gweb: report synchronous resolver setup errors
+
+GResolv returns zero or an encoded -EIO when it cannot queue a lookup.
+The unsigned <= 0 check misses -EIO and returns a live GWeb request ID
+without a resolver callback. Recognize the current error values and save
+the signed result before freeing the failed session.
+
+Upstream-Status: Pending
+---
+--- a/gweb/gweb.c
++++ b/gweb/gweb.c
+@@ -2672,21 +2672,21 @@
+ 		}
+ 		session->address_action = g_idle_add(already_resolved, session);
+ 	} else {
+-		session->resolv_action = g_resolv_lookup_hostname(web->resolv,
++		guint resolv_action;
++
++		resolv_action = g_resolv_lookup_hostname(web->resolv,
+ 					host, resolv_result, session);
+-		if (session->resolv_action <= 0) {
+-			free_session(session);
++		if (resolv_action == 0 || resolv_action == (guint)-EIO) {
+ 			/*
+-			 * While the return signature of #g_resolv_lookup_hostname
+-			 * is 'guint', it overloads this, treating it as 'int' and
+-			 * does potentially return -EIO. Consequently, apply the
+-			 * 'int' casts to handle these cases.
++			 * GResolv returns zero for allocation failure and encodes
++			 * -EIO in its guint result when query setup fails.
+ 			 */
+-			status = (int)session->resolv_action < 0 ?
+-						(int)session->resolv_action :
+-						-ENOENT;
++			status = resolv_action == (guint)-EIO ? -EIO : -ENOENT;
++			free_session(session);
+ 			goto done;
+ 		}
++
++		session->resolv_action = resolv_action;
+ 	}
+ 
+ 	web->session_list = g_list_append(web->session_list, session);

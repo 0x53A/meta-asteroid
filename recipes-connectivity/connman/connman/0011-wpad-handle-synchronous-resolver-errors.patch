@@ -1,0 +1,56 @@
+From: Lukas Rieger <code@lukasrieger.com>
+Subject: [PATCH] wpad: handle synchronous resolver setup errors
+
+GResolv may fail before queueing a lookup, without invoking its callback.
+Return an error from initial WPAD setup so the service can continue with
+direct proxy handling, and take the existing fallback path if a retry
+fails immediately. Release the initial WPAD owner before returning.
+
+Upstream-Status: Pending
+---
+--- a/src/wpad.c
++++ b/src/wpad.c
+@@ -68,6 +68,7 @@
+ 	struct connman_wpad *wpad = user_data;
+ 	const char *ptr;
+ 	char *hostname;
++	guint lookup_id;
+ 
+ 	DBG("status %d", status);
+ 
+@@ -110,8 +111,10 @@
+ 
+ 	DBG("hostname %s", wpad->hostname);
+ 
+-	g_resolv_lookup_hostname(wpad->resolv, wpad->hostname,
++	lookup_id = g_resolv_lookup_hostname(wpad->resolv, wpad->hostname,
+ 							wpad_result, wpad);
++	if (lookup_id == 0 || lookup_id == (guint) -EIO)
++		goto failed;
+ 
+ 	return;
+ 
+@@ -130,6 +133,7 @@
+ 	char **nameservers;
+ 	int index;
+ 	int i;
++	guint lookup_id;
+ 
+ 	DBG("service %p (%s)", service, connman_service_get_identifier(service));
+ 
+@@ -175,8 +179,14 @@
+ 
+ 	wpad->service = connman_service_ref(service);
+ 
+-	g_resolv_lookup_hostname(wpad->resolv, wpad->hostname,
++	lookup_id = g_resolv_lookup_hostname(wpad->resolv, wpad->hostname,
+ 							wpad_result, wpad);
++	if (lookup_id == 0 || lookup_id == (guint) -EIO) {
++		int err = lookup_id == (guint) -EIO ? -EIO : -ENOMEM;
++
++		free_wpad(wpad);
++		return err;
++	}
+ 
+ 	g_hash_table_replace(wpad_list, GINT_TO_POINTER(index), wpad);
+ 
